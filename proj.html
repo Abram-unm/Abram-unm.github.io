@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>UNM CS 412/512 HW3</title>
+  <style>
+    body {
+      background: #111;
+      color: #ccc;
+      font-family: monospace;
+    }
+
+    textarea {
+      background: #222;
+      color: #0f0;
+      font: 14px monospace;
+      width: 400px;
+      height: 250px;
+    }
+
+    canvas {
+      border: 1px solid #444;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Lighting and Shading</h2>
+  <p>Edit vertex and fragment shaders on the left to get the result instantly.<br>
+Save your code to source file if you want to save it.<br>
+Press F12 to see the console for debugging.</p>
+
+  <div style="display: flex; gap: 10px; align-items: flex-start;">
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div>
+        <b>Vertex Shader</b><br>
+        <textarea id="vertEditor"></textarea>
+      </div>
+      <div>
+        <b>Fragment Shader</b><br>
+        <textarea id="fragEditor"></textarea>
+      </div>
+    </div>
+    <div>
+      <canvas id="glcanvas" width="600" height="600"></canvas>
+    </div>
+    <div style="text-align: center;font-size: large;">
+      Diffuse Coefficient:
+      <br>
+      <table style="margin: auto;">
+        <tr>
+          <td>R</td>
+          <td>G</td>
+          <td>B</td>
+        </tr>
+        <tr>
+          <td><input type="range" name="diffuseRSlider" id="diffuseRSlider" min="0.1" max="1" value="0.1" step="0.01"></td>
+          <td><input type="range" name="diffuseGSlider" id="diffuseGSlider" min="0.1" max="1" value="0.1" step="0.01"></td>
+          <td><input type="range" name="diffuseBSlider" id="diffuseBSlider" min="0.1" max="1" value="0.1" step="0.01"></td>
+        </tr>
+      </table>
+      <br>
+      Specular Coefficient:
+      <br>
+      <table style="margin: auto;">
+        <tr>
+          <td>R</td>
+          <td>G</td>
+          <td>B</td>
+        </tr>
+        <tr>
+          <td><input type="range" name="specularRSlider" id="specularRSlider" min="0.1" max="1" value="0.1" step="0.01"></td>
+          <td><input type="range" name="specularGSlider" id="specularGSlider" min="0.1" max="1" value="0.1" step="0.01"></td>
+          <td><input type="range" name="specularBSlider" id="specularBSlider" min="0.1" max="1" value="0.1" step="0.01"></td>
+        </tr>
+      </table>
+      <br>
+      Specular Exponent:
+      <br>
+          <td><input type="range" name="specularSlider" id="specularSlider" min="1" max="100" value="1" step="1"></td>
+      <br>
+      <br><br><br><br>
+    </div>
+
+  <!-- Vertex shader -->
+  <script id="vertex-shader" type="x-shader/x-vertex">#version 300 es
+in vec2 aTexCoord;
+in vec3 aPosition;
+//in vec3 aColor;
+in vec3 aNormal;
+
+uniform float uTime; //time in sec
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+uniform mat4 uModelTransformationMatrix;
+uniform mat4 uScaleTransformationMatrix;
+uniform mat4 uTranslateTransformationMatrix;
+uniform mat3 uNormalMatrix;
+
+//out vec3 vColor;
+out vec3 vPosition;
+out vec3 vNormal;
+out vec2 vTexCoord;
+
+void main() {
+  gl_Position = uProjectionMatrix * uModelViewMatrix * uTranslateTransformationMatrix * uModelTransformationMatrix * uScaleTransformationMatrix * vec4(aPosition,1.0);
+  vNormal = normalize(uNormalMatrix * aNormal);
+  //vColor = aColor;
+  vPosition = gl_Position.xyz;
+  vTexCoord = aTexCoord;
+}
+</script>
+  <!-- Fragment Shader -->
+  <script id="fragment-shader" type="x-shader/x-fragment">#version 300 es
+precision mediump float;
+in vec2 vTexCoord;
+//in vec3 vColor;
+in vec3 vPosition;
+in vec3 vNormal;
+uniform float uAlpha;
+uniform float uRadius;
+uniform float uBumpStrength;
+uniform float uBool;
+uniform int uShapeMaterial;
+uniform vec2 u_resolution;
+uniform vec3 uKa;
+uniform vec3 uKd;
+uniform vec3 uKs;
+uniform vec3 uViewPos;
+uniform vec3 uPointPos;
+uniform sampler2D uTex;
+
+out vec4 fragColor;
+
+/*
+for materials
+  diffuse = 0
+  specular = 1
+  refraction = 2
+  reflection = 3
+*/
+
+struct Ray{
+  vec3 origin;
+  vec3 direction;
+};
+
+struct Hit {
+  bool hit;
+  vec3 point;
+  vec3 normal;
+  int material;
+};
+
+struct Sphere {
+  vec3 center;
+  float radius;
+};
+
+
+vec3 texCalc() {
+  float h = texture(uTex, vTexCoord).r;
+  float hu = texture(uTex, vTexCoord + vec2(0.01, 0.0)).r;
+  float hv = texture(uTex, vTexCoord + vec2(0.0, 0.01)).r;
+  vec3 gradient = vec3((hu - h) * uBumpStrength, (hv - h) * uBumpStrength, 0.1);
+  vec3 normal = vNormal;
+  normal = normalize(normal + gradient);
+  return normal;
+}
+
+
+bool intersectSphere(Ray ray, Sphere sphere, out float t) {
+  vec3 oc = ray.origin - sphere.center;
+  float a = dot(ray.direction, ray.direction);
+  float b = 2.0 * dot(oc, ray.direction);
+  float c = dot(oc, oc) - sphere.radius * sphere.radius;
+  float delta = b * b - 4.0 * a * c;
+
+  if (delta < 0.001)
+  {
+    t = -1.0;
+    return false;
+  }
+  float t0 = (-b + sqrt(delta)) / (2.0 * a);
+  float t1 = (-b - sqrt(delta)) / (2.0 * a);
+  t = t0 > 0.001 ? t0 : t1;
+  return t > 0.001;
+}
+
+float Schlick(float cos) {
+  float base = 1.0 - cos;
+  float F0 = ((1.0 - 1.5) / (1.0 + 1.5));
+  F0 = F0 * F0;
+  return F0 + (1.0 - F0) * (base * base * base * base * base);
+}
+
+Hit traceScene(Ray ray) {
+  Hit hit;
+  hit.hit = true;
+
+  float closestT = 1.0e30;
+  Sphere sphere = Sphere(vPosition, uRadius);
+
+  float t;
+  if (intersectSphere(ray, sphere, t) && t < closestT)
+  {
+    closestT = t;
+  }
+
+  if (closestT < 1.0e30)
+  {
+    hit.hit = true;
+    hit.point = ray.origin + (ray.direction * closestT);
+    hit.normal = normalize(hit.point - sphere.center);
+    hit.material = uShapeMaterial;
+  }
+  if(t < 0.0)
+  {
+    hit.hit = false;
+  }
+  return hit;
+}
+
+vec3 traceRay(Ray ray, int maxStep) {
+  vec3 color = vec3(0.7, 0.0, 0.3);
+  Sphere light_source = Sphere(uPointPos, 1.0);
+  float t;
+  for (int i = 0; i < maxStep; i++){
+    if (intersectSphere(ray, light_source, t))
+    {
+      color = vec3(1.0, 1.0, 1.0);   //color of light
+      break;
+    }
+
+    Hit hit = traceScene(ray);
+    if (!hit.hit)
+    {
+      color = vec3(0.0, 0.0, 0.0);
+      break;
+    }
+
+    Ray shadowRay = Ray(hit.point + hit.normal * 0.001, normalize(light_source.center - hit.point));
+    Hit shadowHit = traceScene(shadowRay);
+
+    float shadowRatio = shadowHit.hit ? 0.2 : 1.0;
+    vec3 direct_light = vec3(0.0, 0.0, 0.0);
+    if (hit.material == 0)
+    {
+      vec3 light_direction = normalize(uPointPos - hit.point);
+      vec3 vColor = texCalc();
+      direct_light = vColor * dot(light_direction, vNormal) * shadowRatio;
+      color = direct_light + uKa;
+      break;
+    }
+
+    if (hit.material == 2)
+    {
+      float cosine = dot(ray.direction, hit.normal);
+      if (cosine < 0.0)
+      {
+        cosine = 0.0;
+      }
+      else if (cosine > 1.0)
+      {
+        cosine = 1.0;
+      }
+      if (Schlick(cosine) > 0.5)
+      {
+        ray.origin = hit.point + hit.normal * 0.001;
+        ray.direction = reflect(ray.direction, hit.normal);
+      }
+      else
+      {
+        ray.origin = hit.point - hit.normal * 0.001;
+        ray.direction = refract(ray.direction, hit.normal, 1.0 / 1.5);
+      }
+    }
+    else
+    {
+      color = direct_light * shadowRatio + uKa;
+      ray.origin = hit.point + 0.001;
+      ray.direction = reflect(ray.direction, hit.normal);
+    }
+  }
+  return color;
+}
+
+
+
+vec3 calculateLight(vec3 lightPos, vec3 normal, vec3 viewDir)
+{
+    // Diffuse
+    vec3 lightDir = normalize(lightPos - vPosition);
+    float cosTheta = max(dot(normal, lightDir), 0.0);
+    vec3 vColor = texCalc();
+    vec3 diffuse = uKd * cosTheta * vColor;
+    // Specular
+    vec3 reflectDir = -reflect(lightDir, normal);
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), uAlpha);
+    vec3 specular = uKs * spec * vec3(1.0);
+    return diffuse + specular;
+}
+
+
+void main() {
+    vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
+    vec3 direction = normalize(vec3(uv, -2.0));
+    Ray ray = Ray(uViewPos, direction);
+    vec3 rayTraceColor = traceRay(ray, 5);
+    fragColor = vec4(rayTraceColor, 1.0);
+} 
+</script>
+
+  <script src="primitives.js"></script>
+  <script src="transformations.js"></script>
+
+  <script>
+    function createShader(gl, type, source) {
+      let shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(shader));
+      }
+      return shader;
+    }
+
+    function createProgram(gl, vsSource, fsSource) {
+      let vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+      let fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+      let prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(prog));
+      }
+      return prog;
+    }
+
+    // WebGL setup
+    const canvas = document.getElementById("glcanvas");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) alert("WebGL2 not supported");
+
+    let vertEditor = document.getElementById("vertEditor");
+    let fragEditor = document.getElementById("fragEditor");
+    vertEditor.value = document.getElementById("vertex-shader").textContent;
+    fragEditor.value = document.getElementById("fragment-shader").textContent;
+
+    let program, posLoc, colorLoc, normLoc, timeLoc, uMVM, uPM, uMTM, uScTM, uTTM, uKAmbient, uKDiffuse, uKSpecular, uPP, uA, uNM, uVP, uR, uSM, uRes;
+    let vbo, nbo, ibo, normbo;
+
+    // Buffers
+    function initBuffers() {
+      positions = positionsCube;
+      colors = colorsCube;
+      indices = indicesCube;
+      norms = normalsCube;
+      vbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+      nbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
+      gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+
+      ibo = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo); 
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+      normbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, normbo); 
+      gl.bufferData(gl.ARRAY_BUFFER, norms, gl.STATIC_DRAW);
+    }
+    initBuffers();
+
+    function initShaderProgram() {
+      try {
+        program = createProgram(gl, vertEditor.value, fragEditor.value);
+        gl.useProgram(program);
+        posLoc = gl.getAttribLocation(program, "aPosition");
+        //colorLoc = gl.getAttribLocation(program, "aColor");
+        normLoc = gl.getAttribLocation(program, "aNormal");
+        timeLoc = gl.getUniformLocation(program, "uTime");
+        uMVM = gl.getUniformLocation(program, "uModelViewMatrix");
+        uPM = gl.getUniformLocation(program, "uProjectionMatrix");
+        uMTM = gl.getUniformLocation(program, "uModelTransformationMatrix");
+        uScTM = gl.getUniformLocation(program, "uScaleTransformationMatrix");
+        uTTM = gl.getUniformLocation(program, "uTranslateTransformationMatrix");
+        uKAmbient = gl.getUniformLocation(program, "uKa");
+        uKDiffuse = gl.getUniformLocation(program, "uKd");
+        uKSpecular = gl.getUniformLocation(program, "uKs");
+        uPP = gl.getUniformLocation(program, "uPointPos");
+        uA = gl.getUniformLocation(program, "uAlpha");
+        uNM = gl.getUniformLocation(program, "uNormalMatrix");
+        uVP = gl.getUniformLocation(program, "uViewPos");
+        uRes = gl.getUniformLocation(program, "uResolution");
+        uR = gl.getUniformLocation(program, "uRadius");
+        uSM = gl.getUniformLocation(program, "uShapeMaterial");
+      } catch (e) { console.error(e); }
+    }
+    initShaderProgram();
+    vertEditor.onkeyup = initShaderProgram;
+    fragEditor.onkeyup = initShaderProgram;
+
+    // Mouse and keyboard interactions
+    let mouseDown = false, lastX, lastY, cubeRotX = 0, cubeRotY = 0;
+    let camX = 0, camY = 0, camZ = -6;
+
+    canvas.addEventListener('mousedown', e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
+    canvas.addEventListener('mouseup', () => mouseDown = false);
+    canvas.addEventListener('mousemove', e => {
+      if (!mouseDown) return;
+      let dx = e.clientX - lastX;
+      let dy = e.clientY - lastY;
+      cubeRotY += dx * 0.01;
+      cubeRotX += dy * 0.01;
+      lastX = e.clientX; lastY = e.clientY;
+    });
+
+    document.addEventListener('keydown', e => {
+      const step = 0.2;
+      switch (e.key) {
+        case 'ArrowUp': camY -= step; break;
+        case 'ArrowDown': camY += step; break;
+        case 'ArrowLeft': camX += step; break;
+        case 'ArrowRight': camX -= step; break;
+        case 'w': camZ += step; break;
+        case 's': camZ -= step; break;
+      }
+    });
+
+
+    let fov = Math.PI / 4, aspect = canvas.width / canvas.height, zNear = 0.1, zFar = 100;
+    let f = 1 / Math.tan(fov / 2);
+    let proj = new Float32Array([
+      f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (zFar + zNear) / (zNear - zFar), -1, 0, 0, (2 * zFar * zNear) / (zNear - zFar), 0
+    ]);
+
+    let startTime = Date.now();
+    let ambient = new Float32Array([0.6, 0.6, 0.6]);
+    let positionPoint = new Float32Array([1.0, 1.0, 2.0]);
+
+    function render() {
+      gl.enable(gl.DEPTH_TEST);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      let cubeRotation = [];
+      let cylinderRotation = [];
+      let sphereRotation = [];
+      let coneRotation = [];
+
+      let sliderRDiffuse = document.getElementById("diffuseRSlider");
+      let sliderRDiffuseValue = Number(sliderRDiffuse.value);
+      sliderRDiffuse.addEventListener("input", () => {
+        sliderRDiffuse = Number(sliderRDiffuse.value);
+      });
+
+      let sliderGDiffuse = document.getElementById("diffuseGSlider");
+      let sliderGDiffuseValue = Number(sliderGDiffuse.value);
+      sliderGDiffuse.addEventListener("input", () => {
+        sliderGDiffuse = Number(sliderGDiffuse.value);
+      });
+
+      let sliderBDiffuse = document.getElementById("diffuseBSlider");
+      let sliderBDiffuseValue = Number(sliderBDiffuse.value);
+      sliderBDiffuse.addEventListener("input", () => {
+        sliderBDiffuse = Number(sliderBDiffuse.value);
+      });
+
+      let sliderRSpecular = document.getElementById("specularRSlider");
+      let sliderRSpecularValue = Number(sliderRSpecular.value);
+      sliderRSpecular.addEventListener("input", () => {
+        sliderRSpecular = Number(sliderRSpecular.value);
+      });
+
+      let sliderGSpecular = document.getElementById("specularGSlider");
+      let sliderGSpecularValue = Number(sliderGSpecular.value);
+      sliderGSpecular.addEventListener("input", () => {
+        sliderGSpecular = Number(sliderGSpecular.value);
+      });
+
+      let sliderBSpecular = document.getElementById("specularBSlider");
+      let sliderBSpecularValue = Number(sliderBSpecular.value);
+      sliderBSpecular.addEventListener("input", () => {
+        sliderBSpecular = Number(sliderBSpecular.value);
+      });
+
+      let sliderSpecular = document.getElementById("specularSlider");
+      let sliderSpecularValue = Number(sliderSpecular.value);
+      sliderSpecular.addEventListener("input", () => {
+        sliderSpecular = Number(sliderSpecular.value);
+      });
+      let diffuse = new Float32Array([sliderRDiffuseValue, sliderGDiffuseValue, sliderBDiffuseValue]);
+      let specular = new Float32Array([sliderRSpecularValue, sliderGSpecularValue, sliderBSpecularValue]);
+
+      for (let shape of shapes) {
+        //delta time in ms
+        let deltaTime = Date.now() - startTime;
+        // rotation matrices
+        let cx = 0, sx = 0;
+        let cy = 0, sy = 0;
+        let rotX = [];
+        let rotY = [];
+        let Rotation = [];
+        // Non-cube just put in place for now
+        cx = Math.cos(shape.rotation[1]);
+        sx = Math.sin(shape.rotation[1]);
+        cy = Math.cos(shape.rotation[0]);
+        sy = Math.sin(shape.rotation[0]);
+
+        rotX = [1, 0, 0, 0, 0, cy, sy, 0, 0, -sy, cy, 0, 0, 0, 0, 1];
+        rotY = [cx, 0, -sx, 0, 0, 1, 0, 0, sx, 0, cx, 0, 0, 0, 0, 1];
+        Rotation = multiplyMat4(rotY, rotX);
+
+        cubeRotation = Rotation;
+        sphereRotation = Rotation;
+        coneRotation = Rotation;
+
+        let translate = [];
+        let radius = 0.0;
+        let material = 0;
+        if(shape.ind == 0)
+        {
+            // Make cube slide back and forth along the bottom
+            translate = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -1.5, Math.sin(deltaTime * 0.001), 0, 1]; 
+            cubeTranslate = translate;
+            radius = 0.6;
+            material = 2;
+        }
+        else if(shape.ind == 1)
+        {
+            translate = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, Math.sin(deltaTime * 0.003), -2, 0, 1]; 
+            sphereTranslate = translate;
+            radius = 0.4;
+            material = 0;
+        }
+        else if(shape.ind == 2)
+        {
+          translate = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1.0 + Math.sin(deltaTime * 0.001), 1.0 + Math.sin(deltaTime * 0.006), 0, 1]; 
+          sphereTranslate = translate;
+          radius = 0.2;
+          material = 0;
+        }
+        if(shape.ind == 3)
+        {
+            // Make cube slide back and forth along the bottom
+            translate = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -3, 0, 1]; 
+            cubeTranslate = translate;
+            radius = 0.6;
+            material = 2;
+        }
+        if(shape.ind == 4)
+        {
+            // Make cube slide back and forth along the bottom
+            translate = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -10, 1]; 
+            cubeTranslate = translate;
+            radius = 0.6;
+            material = 2;
+        }
+
+        //Reassign rotation to specific shape rotation
+        //Reassign translation to specific shape translation
+        if((shape.ind == 0) || (shape.ind == 3) || (shape.ind == 4))
+        {
+            Rotation = cubeRotation;
+            translate = cubeTranslate
+        }
+        else if((shape.ind == 1) ||(shape.ind == 2))
+        {
+            Rotation = sphereRotation;
+            translate = sphereTranslate;
+        }
+
+        // init model-view matrix as identity matrix
+        let modelViewMatrix = mat4Identity();
+        // init model transformation matrix as identity matrix
+        let modelTransformationMatrix = Rotation;
+        // init scale transformation matrix as identity matrix
+        let scaleTransformationMatrix = shape.scale;
+        // camera translation
+        modelViewMatrix = mat4Translate(modelViewMatrix, [camX, camY, camZ]);
+        // Calculate normalMatrix as inverse transpose of model view
+        // Do not worry about non-uniform scaling
+        let normalMatrix = mat3Identity();  //modelViewMatrix without translation
+        // scale factor doesn't matter since it's normalized later
+        normalMatrix = scaleMat3(1 / 4, normalMatrix);
+        // View position matrix
+        let viewPos = new Float32Array([camX, camY, camZ]);
+        let specularExponent = sliderSpecularValue;
+    
+        // translation transformation
+        translateTransformationMatrix = translate;
+        let resolution = [1200, 1200];
+        
+        //set time in seconds
+        gl.uniform1f(timeLoc, deltaTime/1000.0);
+        gl.uniform1f(uR, radius);
+        gl.uniform1i(uSM, material);
+        gl.uniformMatrix4fv(uPM, false, proj);
+        gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
+        gl.uniformMatrix4fv(uMTM, false, modelTransformationMatrix);
+        gl.uniformMatrix4fv(uScTM, false, scaleTransformationMatrix);
+        gl.uniformMatrix4fv(uTTM, false, translateTransformationMatrix);
+        gl.uniformMatrix3fv(uNM, false, normalMatrix);
+        gl.uniform2fv(uRes, resolution);
+        gl.uniform3fv(uKAmbient, ambient);
+        gl.uniform3fv(uKDiffuse, diffuse);
+        gl.uniform3fv(uKSpecular, specular);
+        gl.uniform3fv(uPP, positionPoint);
+        gl.uniform1f(uA, specularExponent);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+        gl.enableVertexAttribArray(posLoc);
+        gl.bufferData(gl.ARRAY_BUFFER, shape.positions, gl.STATIC_DRAW);
+        gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+        //gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
+        //gl.enableVertexAttribArray(colorLoc);
+        //gl.bufferData(gl.ARRAY_BUFFER, shape.colors, gl.STATIC_DRAW);
+        //gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, normbo);
+        gl.enableVertexAttribArray(normLoc);
+        gl.bufferData(gl.ARRAY_BUFFER, shape.normals, gl.STATIC_DRAW);
+        gl.vertexAttribPointer(normLoc, 3, gl.FLOAT, false, 0, 0);
+        
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo); 
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, shape.indices, gl.STATIC_DRAW);
+
+        // draw the object by the index order
+        gl.drawElements(gl.TRIANGLES, shape.indices.length, gl.UNSIGNED_SHORT, 0);
+      }
+    }
+
+    // Initialize when page loads
+    window.onload = function () {
+      setInterval(render, 1);
+    }
+
+  </script>
+</body>
+
+</html>

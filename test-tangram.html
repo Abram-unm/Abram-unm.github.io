@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Tangram Puzzle - WebGL</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+            max-width: 300px;
+            font-size: 12px;
+        }
+        #level-buttons {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .level-button {
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: bold;
+            color: white;
+            background: rgba(0, 100, 200, 0.8);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 120px;
+            text-align: center;
+        }
+        .level-button:hover {
+            background: rgba(0, 150, 255, 0.9);
+            border-color: rgba(255, 255, 255, 0.6);
+            transform: translateX(5px);
+        }
+        .level-button:active {
+            transform: translateX(2px);
+            background: rgba(0, 80, 160, 0.9);
+        }
+        .level-button.reset {
+            background: rgba(200, 50, 50, 0.8);
+            margin-top: 10px;
+        }
+        .level-button.reset:hover {
+            background: rgba(255, 70, 70, 0.9);
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glcanvas"></canvas>
+    
+    <div id="level-buttons">
+        <button class="level-button" id="btn-tree">Tree</button>
+        <button class="level-button reset" id="btn-reset">Reset</button>
+        <button class="level-button" id="btn-auto-place" style="background: rgba(50, 200, 50, 0.8);">Auto-Place Selected</button>
+        <button class="level-button" id="btn-rotate-tree" style="background: rgba(150, 100, 200, 0.8); display: none;">Rotate Tree</button>
+        <button class="level-button" id="btn-flip-tree" style="background: rgba(200, 150, 50, 0.8); display: none;">Bow</button>
+        <button class="level-button" id="btn-animated-texture" style="background: rgba(255, 100, 100, 0.8);">Animated Texture</button>
+        <button class="level-button" id="btn-wood-texture" style="background: rgba(255, 100, 100, 0.8);">Wood Texture</button>
+        <button class="level-button" id="btn-gift-texture" style="background: rgba(255, 100, 100, 0.8);">Gift Texture</button>
+        <button class="level-button" id="btn-steel-texture" style="background: rgba(255, 100, 100, 0.8);">Steel Texture</button>
+    </div>
+
+    <div id="info">
+        <h3>3D Tangram Puzzle - Interactive Control</h3>
+        <p><strong>Level Selection:</strong> Click buttons in the top-left corner to select a level</p>
+        <p><strong>Visual Hints:</strong> Red semi-transparent ghosts show target positions</p>
+        <p><strong>Mouse Interaction:</strong></p>
+        <p>• Left drag: Rotate camera</p>
+        <p>• Left click: Select object</p>
+        <p>• Mouse hover: Highlight object</p>
+        <p>• Scroll wheel: Zoom in/out</p>
+        <p><strong>Keyboard Control (select object first):</strong></p>
+        <p>• A/D: Move object on X axis</p>
+        <p>• W/S: Move object on Z axis</p>
+        <p>• R/F: Move object on Y axis</p>
+        <p>• Shift + WASD: Precision mode</p>
+        <p>• Ctrl + WASD: Sprint mode</p>
+        <p>• Q/E: Rotate around Y-axis</p>
+        <p>• Shift + Q/E: Fine rotation</p>
+        <p>• Z/C: Rotate around Z-axis</p>
+    </div>
+
+    <script src="https://unpkg.com/gifler@0.1.0/gifler.min.js"></script>
+    <script src="transformations.js"></script>
+    <script src="shaders.js"></script>
+    <script src="webgl-core.js"></script>
+    <script src="tangram-geometry.js"></script>
+    <script src="object-manager.js"></script>
+    <script src="raycast-interaction.js"></script>
+    <script src="levels-data.js"></script>
+    <script src="keyboard-control.js"></script>
+    <script src="snapping-logic.js"></script>
+    <script src="level-manager.js"></script>
+    <script src="auto-place.js"></script>
+    <script>
+        const canvas = document.getElementById('glcanvas');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        const webgl = initWebGL(canvas);
+        if (!webgl) {
+            alert('Failed to initialize WebGL');
+        }
+        
+        const gl = webgl.gl;
+        const camera = setupCamera(Math.PI / 4, canvas.width / canvas.height, 0.1, 1000);
+        //here
+        const tangramPieces = createTangramPieces(0.5);
+        const CENTER_TO_BOTTOM = 0.25;
+        
+        const allObjects = [];
+        const tangramObjects = [];
+        tangramPieces.forEach((piece, index) => {
+            if (piece.userData.id < 7)
+            {
+                const obj = createObject(
+                    piece.geometry,
+                    [(index - 3) * 3, CENTER_TO_BOTTOM, 0],
+                    [0, 0, 0],
+                    [1, 1, 1],
+                    false
+                );
+                obj.userData = piece.userData;
+                allObjects.push(obj);
+                // 仅前 7 个拼板参与拼图逻辑（snapping/auto-place）
+                tangramObjects.push(obj);
+            }else if( piece.userData.id == 7)
+            {
+                const obj = createObject(
+                    piece.geometry,
+                    [-250, -50, 0],
+                    [0, 0, 0],
+                    [500, 500, 500],
+                    false
+                );
+                obj.userData = piece.userData;
+                allObjects.push(obj);
+            }else if( piece.userData.id == 8)
+            {
+                const obj = createObject(
+                    piece.geometry,
+                    [-249, -40, 249],
+                    [0, Math.PI / 2, 0],
+                    [498, 400, 498],
+                    false
+                );
+                obj.userData = piece.userData;
+                allObjects.push(obj);
+            }
+        });
+        
+        
+        const raycastInteraction = initRaycastInteraction(canvas, camera, allObjects);
+        const keyboardControl = initKeyboardControl(raycastInteraction);
+        const levelManager = initLevelManager(allObjects, tangramObjects);
+        
+        let isTreeGroupMode = false;
+        let treeRotationY = 0;
+        let isAutoRotating = false;
+        let isFlipping = false;
+        let flipProgress = 0;
+        let treeCenter = [0, 0, 0];
+        let treeCenterBase = [0, 0, 0];
+        let treeOffset = [0, 0, 0];
+        const ROTATION_SPEED = 0.005;
+        
+        function calculateTreeCenter() {
+            const tangramPieces = tangramObjects.filter(obj => !obj.isGhost && obj.userData);
+            if (tangramPieces.length === 0) return [0, 0, 0];
+            
+            let minX = Infinity, maxX = -Infinity;
+            let minY = Infinity, maxY = -Infinity;
+            let minZ = Infinity, maxZ = -Infinity;
+            
+            for (const obj of tangramPieces) {
+                const bbox = getObjectBoundingBox(obj);
+                if (bbox) {
+                    minX = Math.min(minX, bbox.min[0]);
+                    maxX = Math.max(maxX, bbox.max[0]);
+                    minY = Math.min(minY, bbox.min[1]);
+                    maxY = Math.max(maxY, bbox.max[1]);
+                    minZ = Math.min(minZ, bbox.min[2]);
+                    maxZ = Math.max(maxZ, bbox.max[2]);
+                }
+            }
+            
+            return [(minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2];
+        }
+        
+        const snappingSystem = initSnappingSystem(tangramObjects, () => {
+            levelManager.clearGhosts();
+            
+            isTreeGroupMode = true;
+            treeCenterBase = calculateTreeCenter();
+            treeCenter = [treeCenterBase[0], treeCenterBase[1], treeCenterBase[2]];
+            treeOffset = [0, 0, 0];
+            document.getElementById('btn-rotate-tree').style.display = 'block';
+            document.getElementById('btn-flip-tree').style.display = 'block';
+            
+            setTimeout(() => {
+                alert('Congratulations! You have successfully completed the puzzle!');
+            }, 100);
+        }, () => {
+            levelManager.clearGhosts();
+        });
+        
+        document.getElementById('btn-rotate-tree').addEventListener('click', () => {
+            // 切换树本身的自转（不转动摄像机）
+            isAutoRotating = !isAutoRotating;
+            // 让摄像机始终看向树的中心，避免视觉上像摄像机在转
+            camera.target = [treeCenter[0], treeCenter[1], treeCenter[2]];
+        });
+        
+        document.getElementById('btn-flip-tree').addEventListener('click', () => {
+            if (!isFlipping) {
+                isFlipping = true;
+                flipProgress = 0;
+            }
+        });
+        
+        let useAnimatedTexture = false;
+        let gifTexture = null;
+        let gifCanvas = null;
+        let lastGifUpdate = 0;
+        let useWoodTexture = false;
+        let tileTexture = null;
+        let useGiftTexture = false;
+        let giftTexture = null;
+        let useSteelTexture = false;
+        let steelTexture = null;
+        
+        function loadGifTexture(url) {
+            return new Promise((resolve, reject) => {
+                if (typeof gifler === 'undefined') {
+                    reject(new Error('gifler library not loaded'));
+                    return;
+                }
+                
+                const canvas = document.createElement('canvas');
+                canvas.style.display = 'none';
+                document.body.appendChild(canvas);
+                
+                let loadingComplete = false;
+                
+                gifler(url).get((animator) => {
+                    try {
+                        loadingComplete = true;
+                        
+                        const width = animator.width;
+                        const height = animator.height;
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        
+                        const tex = gl.createTexture();
+                        gl.bindTexture(gl.TEXTURE_2D, tex);
+                        
+                        function isPowerOf2(value) {
+                            return (value & (value - 1)) === 0;
+                        }
+                        
+                        if (isPowerOf2(width) && isPowerOf2(height)) {
+                            gl.generateMipmap(gl.TEXTURE_2D);
+                        } else {
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                        }
+                        
+                        gifCanvas = canvas;
+                        lastGifUpdate = Date.now();
+                        
+                        animator.animateInCanvas(canvas);
+                        
+                        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+                        
+                        resolve(tex);
+                    } catch (error) {
+                        loadingComplete = true;
+                        reject(error);
+                    }
+                });
+                
+                setTimeout(() => {
+                    if (!loadingComplete) {
+                        reject(new Error('GIF loading timeout - check network connection and URL'));
+                    }
+                }, 10000);
+            });
+        }
+        
+        document.getElementById('btn-animated-texture').addEventListener('click', () => {
+            const btn = document.getElementById('btn-animated-texture');
+            
+            if (!useAnimatedTexture) {
+                useAnimatedTexture = true;
+                
+                if (!gifTexture) {
+                    const gifUrl = 'https://raw.githubusercontent.com/GinsengHoney/CS512CG/main/test.gif';
+                    loadGifTexture(gifUrl)
+                        .then(tex => {
+                            gifTexture = tex;
+                            btn.style.backgroundColor = 'rgba(100, 255, 100, 0.8)';
+                            btn.textContent = 'Animated Texture: ON';
+                        })
+                        .catch(err => {
+                            useAnimatedTexture = false;
+                            btn.style.backgroundColor = 'rgba(255, 50, 50, 0.8)';
+                            btn.textContent = 'Animated Texture: Load Failed';
+                            alert('Failed to load animated texture. Please check your network connection or GitHub link.');
+                        });
+                } else {
+                    btn.style.backgroundColor = 'rgba(100, 255, 100, 0.8)';
+                    btn.textContent = 'Animated Texture: ON';
+                }
+            } else {
+                useAnimatedTexture = false;
+                btn.style.backgroundColor = 'rgba(255, 100, 100, 0.8)';
+                btn.textContent = 'Animated Texture';
+            }
+        });
+
+        //original source: https://www.sketchuptextureclub.com/textures/architecture/tiles-interior/ceramic-wood/wood-ceramic-tile-texture-seamless-16163
+        document.getElementById('btn-wood-texture').addEventListener('click', () => {
+            const btn = document.getElementById('btn-wood-texture');
+            
+            if (!useWoodTexture) {
+                useWoodTexture = true;
+                
+                if (!tileTexture) {
+                    //insert images loading here
+                    const canvas = document.createElement('canvas');
+                    canvas.style.display = 'none';
+                    document.body.appendChild(canvas);
+                    
+                    let loadingComplete = false;
+                
+                    loadingComplete = true;
+                        
+                    const width = window.innerWidth;
+                    const height = window.innerHeight;
+                        
+                    canvas.width = width;
+                    canvas.height = height;
+                        
+                    const woodTexture = gl.createTexture();
+    
+                    const woodImage = new Image();
+                    woodImage.src = 'https://raw.githubusercontent.com/Abram-unm/image_host/main/wood.png';
+                    woodImage.crossOrigin = "anonymous"; 
+                    // Create texture
+                    woodImage.onload = function() {
+                        try {
+                            gl.activeTexture(gl.TEXTURE0);
+                            // Bind textures
+                            gl.bindTexture(gl.TEXTURE_2D, woodTexture);
+                            // Define wrapping
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+                            // Texture information
+                            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, woodImage);
+
+                            gl.generateMipmap(gl.TEXTURE_2D);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+                        } catch (e) { console.error(e); }
+                    }
+                    tileTexture = woodTexture;
+                    btn.style.backgroundColor = 'rgba(100, 255, 100, 0.8)';
+                    btn.textContent = 'Wood Texture: ON';
+                } else {
+                    btn.style.backgroundColor = 'rgba(100, 255, 100, 0.8)';
+                    btn.textContent = 'Wood Texture: ON';
+                }
+            } else {
+                useWoodTexture = false;
+                btn.style.backgroundColor = 'rgba(255, 100, 100, 0.8)';
+                btn.textContent = 'Wood Texture';
+            }
+        });
+
+        //original source: https://www.textures4photoshop.com/tex/isolated-objects/gift-box-with-golden-ribbon-png.aspx
+        document.getElementById('btn-gift-texture').addEventListener('click', () => {
+            const btn = document.getElementById('btn-gift-texture');
+            
+            if (!useGiftTexture) {
+                // 只启用礼物纹理，其它纹理关闭
+                useGiftTexture = true;
+                useWoodTexture = false;
+                useSteelTexture = false;
+                useAnimatedTexture = false;
+                
+                if (!giftTexture) {
+                    const presentTexture = gl.createTexture();
+
+                    const giftImage = new Image();
+                    giftImage.src = 'https://raw.githubusercontent.com/Abram-unm/image_host/main/gift.png';
+                    giftImage.crossOrigin = "anonymous"; 
+                    giftImage.onload = function() {
+                        try {
+                            gl.activeTexture(gl.TEXTURE0);
+                            gl.bindTexture(gl.TEXTURE_2D, presentTexture);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+                            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, giftImage);
+                            gl.generateMipmap(gl.TEXTURE_2D);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+                        } catch (e) { console.error(e); }
+                    }
+                    giftTexture = presentTexture;
+                }
+                btn.style.backgroundColor = 'rgba(100, 255, 100, 0.8)';
+                btn.textContent = 'Gift Texture: ON';
+            } else {
+                useGiftTexture = false;
+                btn.style.backgroundColor = 'rgba(255, 100, 100, 0.8)';
+                btn.textContent = 'Gift Texture';
+            }
+        });
+
+        //original source: https://stock.adobe.com/images/texture-of-silver-metal-panel-with-cross-hatch-pattern/570104165
+        document.getElementById('btn-steel-texture').addEventListener('click', () => {
+            const btn = document.getElementById('btn-steel-texture');
+            
+            if (!useSteelTexture) {
+                // 只启用钢板纹理，其它纹理关闭
+                useSteelTexture = true;
+                useWoodTexture = false;
+                useGiftTexture = false;
+                useAnimatedTexture = false;
+                
+                if (!steelTexture) {
+                    const metalTexture = gl.createTexture();
+
+                    const steelImage = new Image();
+                    steelImage.src = 'https://raw.githubusercontent.com/Abram-unm/image_host/main/steel.png';
+                    steelImage.crossOrigin = "anonymous"; 
+                    steelImage.onload = function() {
+                        try {
+                            gl.activeTexture(gl.TEXTURE0);
+                            gl.bindTexture(gl.TEXTURE_2D, metalTexture);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+                            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, steelImage);
+                            gl.generateMipmap(gl.TEXTURE_2D);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+                        } catch (e) { console.error(e); }
+                    }
+                    steelTexture = metalTexture;
+                }
+                btn.style.backgroundColor = 'rgba(100, 255, 100, 0.8)';
+                btn.textContent = 'Steel Texture: ON';
+            } else {
+                useSteelTexture = false;
+                btn.style.backgroundColor = 'rgba(255, 100, 100, 0.8)';
+                btn.textContent = 'Steel Texture';
+            }
+        });
+        
+        const autoPlaceSystem = initAutoPlace(
+            raycastInteraction,
+            (object, allObjects) => snappingSystem.checkObject(object),
+            tangramObjects
+        );
+        
+        document.getElementById('btn-tree').addEventListener('click', () => {
+            levelManager.loadLevel('tree');
+            snappingSystem.reset();
+            autoPlaceSystem.stop();
+        });
+        
+        document.getElementById('btn-reset').addEventListener('click', () => {
+            isTreeGroupMode = false;
+            treeRotationY = 0;
+            isAutoRotating = false;
+            isFlipping = false;
+            flipProgress = 0;
+            treeOffset = [0, 0, 0];
+            treeCenter = [0, 0, 0];
+            treeCenterBase = [0, 0, 0];
+            document.getElementById('btn-rotate-tree').style.display = 'none';
+            document.getElementById('btn-flip-tree').style.display = 'none';
+            levelManager.reset();
+            snappingSystem.reset();
+            autoPlaceSystem.stop();
+        });
+        
+        document.getElementById('btn-auto-place').addEventListener('click', () => {
+            if (autoPlaceSystem.isAnimating()) {
+                return;
+            }
+            autoPlaceSystem.autoPlace(0.5);
+        });
+        
+        let isDragging = false;
+        let wasDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let dragStartPosition = { x: 0, y: 0 };
+        const DRAG_THRESHOLD = 5;
+        
+        canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 0) {
+                isDragging = false;
+                dragStartPosition = { x: e.clientX, y: e.clientY };
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+                raycastInteraction.setDragging(false);
+            }
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            if (dragStartPosition.x !== undefined) {
+                const dx = e.clientX - dragStartPosition.x;
+                const dy = e.clientY - dragStartPosition.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance > DRAG_THRESHOLD) {
+                    if (!isDragging) {
+                        isDragging = true;
+                        raycastInteraction.setDragging(true);
+                    }
+                }
+                
+                if (isDragging) {
+                    const deltaX = e.clientX - previousMousePosition.x;
+                    const deltaY = e.clientY - previousMousePosition.y;
+                    
+                    cameraTheta -= deltaX * 0.01;
+                    cameraPhi += deltaY * 0.01;
+                    cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi));
+                    
+                    updateCameraFromSpherical();
+                    
+                    previousMousePosition = { x: e.clientX, y: e.clientY };
+                }
+            }
+        });
+        
+        canvas.addEventListener('mouseup', (e) => {
+            if (e.button === 0) {
+                if (isDragging) {
+                    raycastInteraction.setDragging(false);
+                    wasDragging = true;
+                    setTimeout(() => { wasDragging = false; }, 100);
+                } else {
+                    wasDragging = false;
+                }
+                isDragging = false;
+                dragStartPosition = { x: undefined, y: undefined };
+            }
+        });
+        
+        let cameraTheta = Math.atan2(5, 10);
+        let cameraPhi = Math.acos(5 / Math.sqrt(5*5 + 5*5 + 10*10));
+        let cameraRadius = Math.sqrt(5*5 + 5*5 + 10*10);
+        
+        function updateCameraFromSpherical() {
+            camera.position[0] = cameraRadius * Math.sin(cameraPhi) * Math.sin(cameraTheta);
+            camera.position[1] = cameraRadius * Math.cos(cameraPhi);
+            camera.position[2] = cameraRadius * Math.sin(cameraPhi) * Math.cos(cameraTheta);
+        }
+        
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const scale = e.deltaY > 0 ? 1.1 : 0.9;
+            cameraRadius = Math.max(3, Math.min(50, cameraRadius * scale));
+            updateCameraFromSpherical();
+        }, { passive: false });
+        
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            camera.aspect = canvas.width / canvas.height;
+            const f = 1 / Math.tan(camera.fov / 2);
+            const nf = 1 / (camera.near - camera.far);
+            camera.projectionMatrix = new Float32Array([
+                f / camera.aspect, 0, 0, 0,
+                0, f, 0, 0,
+                0, 0, (camera.far + camera.near) * nf, -1,
+                0, 0, 2 * camera.far * camera.near * nf, 0
+            ]);
+            gl.viewport(0, 0, canvas.width, canvas.height);
+        });
+        
+        const objectBuffers = new Map();
+        
+        function getOrCreateBuffers(obj) {
+            if (!objectBuffers.has(obj)) {
+                const buffers = {
+                    position: gl.createBuffer(),
+                    color: gl.createBuffer(),
+                    normal: gl.createBuffer(),
+                    texCoord: gl.createBuffer(),
+                    index: gl.createBuffer()
+                };
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+                gl.bufferData(gl.ARRAY_BUFFER, obj.geometry.positions, gl.STATIC_DRAW);
+                
+                if (obj.geometry.texCoords) {
+                    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texCoord);
+                    gl.bufferData(gl.ARRAY_BUFFER, obj.geometry.texCoords, gl.STATIC_DRAW);
+                }
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers.color);
+                gl.bufferData(gl.ARRAY_BUFFER, obj.geometry.colors, gl.STATIC_DRAW);
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers.normal);
+                gl.bufferData(gl.ARRAY_BUFFER, obj.geometry.normals, gl.STATIC_DRAW);
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.index);
+                gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, obj.geometry.indices, gl.STATIC_DRAW);
+                objectBuffers.set(obj, buffers);
+            }
+            return objectBuffers.get(obj);
+        }
+        
+        function updateColorBuffer(obj) {
+            const buffers = getOrCreateBuffers(obj);
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers.color);
+            gl.bufferData(gl.ARRAY_BUFFER, obj.geometry.colors, gl.DYNAMIC_DRAW);
+        }
+        
+        window.updateColorBuffer = updateColorBuffer;
+        
+        function renderObject(obj, program, attribLocs, uniformLocs, isGhost = false) {
+            if (isGhost) {
+                gl.useProgram(webgl.ghostProgram);
+                gl.enable(gl.BLEND);
+                gl.depthMask(false);
+            } else {
+                gl.useProgram(program);
+                gl.disable(gl.BLEND);
+                gl.depthMask(true);
+            }
+            
+            let transform = getObjectTransformMatrix(obj);
+            
+            // 仅旋转/翻转前 7 个拼板；不旋转背景/地板
+            if (isTreeGroupMode && !isGhost && obj.userData && obj.userData.id < 7) {
+                const translateToCenter = mat4Translation(-treeCenter[0] - treeOffset[0], -treeCenter[1] - treeOffset[1], -treeCenter[2] - treeOffset[2]);
+                const translateBack = mat4Translation(treeCenter[0] + treeOffset[0], treeCenter[1] + treeOffset[1], treeCenter[2] + treeOffset[2]);
+                
+                let groupRotation = mat4Identity();
+                
+                if (isFlipping) {
+                    groupRotation = mat4RotateX(groupRotation, flipProgress * Math.PI * 2);
+                } else {
+                    groupRotation = mat4RotateY(groupRotation, treeRotationY);
+                }
+                
+                let groupTransform = multiplyMat4(translateToCenter, groupRotation);
+                groupTransform = multiplyMat4(translateBack, groupTransform);
+                transform = multiplyMat4(groupTransform, transform);
+            }
+            
+            const viewMatrix = updateCameraViewMatrix(camera);
+            const modelViewMatrix = multiplyMat4(viewMatrix, transform);
+            const normalMatrix = extractNormalMatrix(modelViewMatrix);
+            
+            const locs = isGhost ? webgl.ghostUniformLocations : uniformLocs;
+            const attrs = isGhost ? webgl.ghostAttribLocations : attribLocs;
+            
+            gl.uniformMatrix4fv(locs.projectionMatrix, false, camera.projectionMatrix);
+            gl.uniformMatrix4fv(locs.modelViewMatrix, false, modelViewMatrix);
+            gl.uniformMatrix4fv(locs.modelTransformationMatrix, false, mat4Identity());
+            gl.uniformMatrix4fv(locs.scaleTransformationMatrix, false, mat4Identity());
+            gl.uniformMatrix4fv(locs.translateTransformationMatrix, false, mat4Identity());
+            gl.uniformMatrix3fv(locs.normalMatrix, false, normalMatrix);
+            gl.uniform1f(locs.bump, 1000.0);
+            
+            if (!isGhost) {
+                gl.uniform3fv(uniformLocs.ka, new Float32Array([0.6, 0.6, 0.6]));
+                gl.uniform3fv(uniformLocs.kd, new Float32Array([0.8, 0.8, 0.8]));
+                gl.uniform3fv(uniformLocs.ks, new Float32Array([0.5, 0.5, 0.5]));
+                gl.uniform1f(uniformLocs.alpha, 32.0);
+                gl.uniform3fv(uniformLocs.viewPos, new Float32Array(camera.position));
+                gl.uniform3fv(uniformLocs.pointPos, new Float32Array([0, 10, 0]));
+                gl.uniform3fv(uniformLocs.spotlightPos, new Float32Array([0, 10, 0]));
+                
+                gl.uniform1i(uniformLocs.useTexture, useAnimatedTexture && gifTexture ? 1 : 0);
+                
+                if (useAnimatedTexture && gifTexture) {
+                    gl.activeTexture(gl.TEXTURE0);
+                    gl.bindTexture(gl.TEXTURE_2D, gifTexture);
+                    gl.uniform1i(uniformLocs.texture, 0);
+                }
+
+                if (useWoodTexture && tileTexture) {
+                    gl.uniform1i(uniformLocs.useTexture, 1);
+                    gl.activeTexture(gl.TEXTURE0);
+                    gl.bindTexture(gl.TEXTURE_2D, tileTexture);
+                    gl.uniform1i(uniformLocs.texture, 0);
+                }
+
+                if (useGiftTexture && giftTexture) {
+                    gl.uniform1i(uniformLocs.useTexture, 1);
+                    gl.activeTexture(gl.TEXTURE0);
+                    gl.bindTexture(gl.TEXTURE_2D, giftTexture);
+                    gl.uniform1i(uniformLocs.texture, 0);
+                }
+
+                if (useSteelTexture && steelTexture) {
+                    gl.uniform1i(uniformLocs.useTexture, 1);
+                    gl.activeTexture(gl.TEXTURE0);
+                    gl.bindTexture(gl.TEXTURE_2D, steelTexture);
+                    gl.uniform1i(uniformLocs.texture, 0);
+                }
+
+                if(obj.userData.id > 6)
+                {
+                    gl.uniform1i(uniformLocs.useTexture, 1);
+                    gl.activeTexture(gl.TEXTURE0);
+                    gl.bindTexture(gl.TEXTURE_2D, null);
+                    gl.uniform1i(uniformLocs.texture, 0);
+                }
+            }
+            
+            const buffers = getOrCreateBuffers(obj);
+            
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+            gl.enableVertexAttribArray(attrs.position);
+            gl.vertexAttribPointer(attrs.position, 3, gl.FLOAT, false, 0, 0);
+            
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers.color);
+            gl.enableVertexAttribArray(attrs.color);
+            gl.vertexAttribPointer(attrs.color, 3, gl.FLOAT, false, 0, 0);
+            
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers.normal);
+            gl.enableVertexAttribArray(attrs.normal);
+            gl.vertexAttribPointer(attrs.normal, 3, gl.FLOAT, false, 0, 0);
+            
+            if (obj.geometry.texCoords && attrs.texCoord !== -1) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texCoord);
+                gl.enableVertexAttribArray(attrs.texCoord);
+                gl.vertexAttribPointer(attrs.texCoord, 2, gl.FLOAT, false, 0, 0);
+            }
+
+            if(obj.userData.id > 6)
+            {
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texCoord);
+                gl.enableVertexAttribArray(attrs.texCoord);
+                gl.vertexAttribPointer(attrs.texCoord, 2, gl.FLOAT, false, 0, 0);
+            }
+            
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.index);
+            
+            gl.drawElements(gl.TRIANGLES, obj.geometry.indices.length, gl.UNSIGNED_SHORT, 0);
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            keyboardControl.update();
+            snappingSystem.update();
+            
+            if (isTreeGroupMode && isAutoRotating && !isFlipping) {
+                treeRotationY += ROTATION_SPEED;
+            }
+            
+            if (useAnimatedTexture && gifCanvas && gifTexture) {
+                const now = Date.now();
+                if (now - lastGifUpdate > 16) {
+                    gl.bindTexture(gl.TEXTURE_2D, gifTexture);
+                    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, gifCanvas);
+                    lastGifUpdate = now;
+                }
+            }
+            
+            if (isFlipping) {
+                flipProgress += 0.015;
+                
+                const forwardDistance = 4.0;
+                const jumpHeight = 2.0;
+                
+                const t = flipProgress;
+                const forwardProgress = t;
+                const jumpProgress = Math.sin(t * Math.PI);
+                
+                treeOffset[2] = -forwardDistance * forwardProgress;
+                treeOffset[1] = jumpHeight * jumpProgress;
+                
+                if (flipProgress >= 1.0) {
+                    treeCenter[2] += treeOffset[2];
+                    treeCenterBase[2] = treeCenter[2];
+                    treeOffset[0] = 0;
+                    treeOffset[1] = 0;
+                    treeOffset[2] = 0;
+                    flipProgress = 0;
+                    isFlipping = false;
+                }
+            }
+            
+            if (useAnimatedTexture && gifCanvas && gifTexture) {
+                const now = Date.now();
+                if (now - lastGifUpdate > 16) {
+                    gl.bindTexture(gl.TEXTURE_2D, gifTexture);
+                    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, gifCanvas);
+                    lastGifUpdate = now;
+                }
+            }
+            
+            gl.clearColor(0.13, 0.13, 0.13, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            
+            const solidObjects = [];
+            const ghostObjects = [];
+            
+            for (const obj of allObjects) {
+                if (obj.isGhost) {
+                    ghostObjects.push(obj);
+                } else {
+                    solidObjects.push(obj);
+                }
+            }
+            
+            for (const obj of solidObjects) {
+                renderObject(obj, webgl.mainProgram, webgl.attribLocations, webgl.uniformLocations, false);
+            }
+            
+            if (ghostObjects.length > 0) {
+                for (const obj of ghostObjects) {
+                    renderObject(obj, webgl.mainProgram, webgl.attribLocations, webgl.uniformLocations, true);
+                }
+            }
+        }
+        
+        animate();
+    </script>
+</body>
+</html>
+
